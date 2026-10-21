@@ -1,12 +1,79 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 
+// Catálogo completo de tipos de pregunta soportados. Las máscaras (predefinidas)
+// traen su contenido listo y sólo hay que editar el texto; el resto se arma
+// con opciones / filas / columnas.
+export type TipoPregunta =
+  // Predefinidas (máscaras)
+  | 'genero'
+  | 'si_no'
+  | 'idioma'
+  | 'ranking'
+  // Respuesta única
+  | 'opcion_unica'
+  | 'opcion_unica_comentario'
+  | 'desplegable'
+  | 'escala'
+  | 'escala_n'
+  // Opción múltiple
+  | 'opcion_multiple'
+  | 'opcion_multiple_comentario'
+  // Texto libre
+  | 'texto'
+  | 'texto_linea'
+  | 'texto_parrafos'
+  | 'textos_multiples'
+  // Numéricos y fecha
+  | 'numero'
+  | 'numero_multiple'
+  | 'fecha'
+  // Matrices
+  | 'matriz'
+  | 'matriz_escala'
+  | 'matriz_aumentar'
+  | 'matriz_sino'
+  | 'matriz_texto'
+  | 'matriz_numero'
+  | 'matriz_doble_eje'
+  | 'matriz_columnas'
+  // Especiales
+  | 'archivo'
+  | 'mostrar_texto';
+
+// Formato de respuesta de las preguntas numéricas (sustituye a "Ecuación",
+// que en el .docx sólo servía para forzar un valor numérico).
+export type FormatoNumero = 'entero' | 'decimal' | 'porcentaje' | 'moneda';
+
 export interface Pregunta {
   id: string;
   texto: string;
-  tipo: 'texto' | 'opcion_multiple' | 'escala' | 'matriz';
+  tipo: TipoPregunta;
+  /** Opciones de respuesta. En matrices son las filas. */
   opciones?: string[];
+  /** Columnas de la matriz. En `matriz_columnas` son los ítems a calificar. */
   columnas?: string[];
+  obligatorio?: boolean;
+  placeholder?: string;
+  /** Límites de las escalas y preguntas numéricas. */
+  minimo?: number;
+  maximo?: number;
+  formato?: FormatoNumero;
+  /** Puntos de la matriz de doble eje. */
+  puntos?: number;
+  /** Extremos de la matriz de doble eje y del ranking. */
+  ejeIzquierdo?: string;
+  ejeDerecho?: string;
+  /** Opción libre "Otro" en las de opción múltiple. */
+  otro?: boolean;
+  variosArchivos?: boolean;
+  extensiones?: string[];
+  /** Tamaño máximo por archivo, en MB. */
+  tamanoMaximo?: number;
 }
+
+// Una respuesta puede ser un valor simple, una lista (opción múltiple,
+// ranking) o un mapa con una clave por sub-elemento (doble eje, archivos).
+export type ValorRespuesta = string | number | string[] | Record<string, string>;
 
 // Encuesta tal como la ve la app: la versión activa aplanada por el backend,
 // más metadata para mostrar "v3 · 6 respuestas" y para saber si se puede
@@ -37,7 +104,7 @@ export interface VersionHistorial {
 export interface RespuestaEncuesta {
   id: string; // uuid generado en el cliente
   encuestaId: string;
-  respuestas: Record<string, string | number>;
+  respuestas: Record<string, ValorRespuesta>;
   fechaRespuesta: string; // ISO string
   versionId?: string; // versión que el usuario vio al responder
   estado: 'pendiente' | 'sincronizado';

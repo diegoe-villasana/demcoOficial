@@ -7,7 +7,8 @@ import {
   obtenerVersionesEnServidor,
   type RespuestaRecibida,
 } from '../services/encuestasService';
-import { Encuesta, Pregunta, VersionHistorial } from '../db/schema';
+import { Encuesta, Pregunta, ValorRespuesta, VersionHistorial } from '../db/schema';
+import { esInformativa, esMatriz, rangoEscala, TIPOS_ESCALA, TIPOS_TEXTO } from '../services/tiposPregunta';
 
 function formatearFecha(iso: string): string {
   const d = new Date(iso);
@@ -18,67 +19,193 @@ function formatearFecha(iso: string): string {
   });
 }
 
-// Una matriz se guarda con una clave por fila: `${pregunta.id}-${fila}`.
-function valorMatriz(respuesta: RespuestaRecibida, pregunta: Pregunta): Array<{ fila: string; valor: string }> {
-  return (pregunta.opciones ?? []).map((fila) => {
-    const v = respuesta.respuestas[`${pregunta.id}-${fila}`];
-    return { fila, valor: v === undefined ? '' : String(v) };
-  });
+function valorLegible(v: ValorRespuesta | undefined): string {
+  if (v === undefined || v === null || v === '') return '';
+  if (Array.isArray(v)) return v.join(', ');
+  if (typeof v === 'object') {
+    return Object.entries(v)
+      .map(([k, val]) => `${k}: ${val}`)
+      .join(' · ');
+  }
+  return String(v);
 }
 
-function valorSimple(respuesta: RespuestaRecibida, pregunta: Pregunta): string {
-  const v = respuesta.respuestas[pregunta.id];
-  if (v === undefined || v === '') return 'Sin responder';
-  return String(v);
+const lista = (v: ValorRespuesta | undefined): string[] => {
+  if (Array.isArray(v)) return v.map(String);
+  if (v === undefined || v === null || v === '') return [];
+  return [String(v)];
+};
+
+// Una pregunta compuesta (matriz, doble eje, varios renglones) se guarda con
+// una clave por fila o por ítem: `${pregunta.id}-${fila}`. Acá se aplana a
+// líneas legibles para la vista de detalle.
+function subRespuestas(
+  respuesta: RespuestaRecibida,
+  pregunta: Pregunta
+): Array<{ etiqueta: string; valor: string }> {
+  const clave = (sufijo: string) => `${pregunta.id}-${sufijo}`;
+
+  if (pregunta.tipo === 'matriz_doble_eje') {
+    return (pregunta.opciones ?? []).flatMap((fila) =>
+      (['izq', 'der'] as const).map((lado) => ({
+        etiqueta: `${fila} · ${lado === 'izq' ? pregunta.ejeIzquierdo ?? 'Izquierda' : pregunta.ejeDerecho ?? 'Derecha'}`,
+        valor: valorLegible(respuesta.respuestas[clave(`${fila}-${lado}`)]),
+      }))
+    );
+  }
+
+  if (pregunta.tipo === 'matriz_columnas') {
+    return (pregunta.columnas ?? []).map((columna) => ({
+      etiqueta: columna,
+      valor: valorLegible(respuesta.respuestas[clave(columna)]),
+    }));
+  }
+
+  if (esMatriz(pregunta.tipo)) {
+    return (pregunta.opciones ?? []).map((fila) => ({
+      etiqueta: fila,
+      valor: valorLegible(respuesta.respuestas[clave(fila)]),
+    }));
+  }
+
+  if (pregunta.tipo === 'textos_multiples' || pregunta.tipo === 'numero_multiple') {
+    return (pregunta.opciones ?? []).map((fila) => ({
+      etiqueta: fila,
+      valor: valorLegible(respuesta.respuestas[clave(fila)]),
+    }));
+  }
+
+  const comentarios: Array<{ etiqueta: string; valor: string }> = [];
+
+  if (pregunta.tipo === 'opcion_unica_comentario') {
+    comentarios.push({
+      etiqueta: 'Comentario',
+      valor: valorLegible(respuesta.respuestas[clave('comentario')]),
+    });
+  }
+
+  if (pregunta.tipo === 'opcion_multiple_comentario') {
+    const prefijo = clave('comentario-');
+    for (const [k, v] of Object.entries(respuesta.respuestas)) {
+      if (k.startsWith(prefijo)) comentarios.push({ etiqueta: k.slice(prefijo.length), valor: valorLegible(v) });
+    }
+  }
+
+  return comentarios;
+}
+
+function valoresPrincipales(respuesta: RespuestaRecibida, pregunta: Pregunta): string[] {
+  return lista(respuesta.respuestas[pregunta.id]);
 }
 
 interface Resumen {
   pregunta: Pregunta;
-  promedio?: number;
+  promedio?: { valor: number; max: number };
   conteo?: Array<{ etiqueta: string; cantidad: number }>;
-  filas?: Array<{ fila: string; promedio: number; total: number }>;
+  filas?: Array<{ fila: string; promedio: number; max: number; total: number }>;
+}
+
+function numerosDe(respuestas: RespuestaRecibida[], clave: string): number[] {
+  return respuestas
+    .map((r) => r.respuestas[clave])
+    .filter((v) => v !== undefined && v !== '' && v !== null)
+    .map((v) => (typeof v === 'number' ? v : Number(String(v))))
+    .filter((n) => Number.isFinite(n));
+}
+
+function promedioDe(valores: number[]): number | null {
+  if (valores.length === 0) return null;
+  return Math.round((valores.reduce((a, b) => a + b, 0) / valores.length) * 100) / 100;
+}
+
+function contar(todos: string[], opciones: string[]): Array<{ etiqueta: string; cantidad: number }> {
+  return opciones.map((opcion) => ({
+    etiqueta: opcion,
+    cantidad: todos.filter((t) => t === opcion).length,
+  }));
 }
 
 function calcularResumen(preguntas: Pregunta[], respuestas: RespuestaRecibida[]): Resumen[] {
   const resumenes: Resumen[] = [];
 
   for (const pregunta of preguntas) {
-    if (pregunta.tipo === 'escala') {
-      const numeros = respuestas
-        .map((r) => r.respuestas[pregunta.id])
-        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-      if (numeros.length === 0) continue;
-      const promedio = numeros.reduce((a, b) => a + b, 0) / numeros.length;
-      resumenes.push({ pregunta, promedio: Math.round(promedio * 100) / 100 });
+    if (esInformativa(pregunta.tipo)) continue;
+
+    const opciones = pregunta.opciones ?? [];
+    const claveFila = (fila: string) => `${pregunta.id}-${fila}`;
+
+    // Escalas y números sueltos: promedio directo.
+    if (TIPOS_ESCALA.includes(pregunta.tipo) || pregunta.tipo === 'numero') {
+      const { max } = rangoEscala(pregunta);
+      const promedio = promedioDe(numerosDe(respuestas, pregunta.id));
+      if (promedio === null) continue;
+      resumenes.push({ pregunta, promedio: { valor: promedio, max } });
       continue;
     }
 
-    if (pregunta.tipo === 'opcion_multiple') {
-      const opciones = pregunta.opciones ?? [];
-      if (opciones.length === 0) continue;
-      const conteo = opciones.map((opcion) => ({
-        etiqueta: opcion,
-        cantidad: respuestas.filter((r) => String(r.respuestas[pregunta.id] ?? '') === opcion).length,
-      }));
-      resumenes.push({ pregunta, conteo });
-      continue;
-    }
-
-    if (pregunta.tipo === 'matriz') {
-      const filas = (pregunta.opciones ?? []).map((fila) => {
-        const valores = respuestas
-          .map((r) => r.respuestas[`${pregunta.id}-${fila}`])
-          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-        return {
-          fila,
-          promedio: valores.length > 0
-            ? Math.round((valores.reduce((a, b) => a + b, 0) / valores.length) * 100) / 100
-            : 0,
-          total: valores.length,
-        };
+    // Matrices numéricas: promedio por fila.
+    if (pregunta.tipo === 'matriz_escala' || pregunta.tipo === 'matriz_numero') {
+      const { max } = rangoEscala(pregunta);
+      const filas = opciones.map((fila) => {
+        const valores = numerosDe(respuestas, claveFila(fila));
+        return { fila, promedio: promedioDe(valores) ?? 0, max, total: valores.length };
       });
       if (filas.length === 0) continue;
       resumenes.push({ pregunta, filas });
+      continue;
+    }
+
+    // Matrices de etiquetas: distribución de lo elegido en cada celda.
+    if (esMatriz(pregunta.tipo)) {
+      if (pregunta.tipo === 'matriz_doble_eje') {
+        const izq = pregunta.ejeIzquierdo ?? 'Izquierda';
+        const der = pregunta.ejeDerecho ?? 'Derecha';
+        const todos = respuestas.flatMap((r) =>
+          opciones.flatMap((fila) =>
+            (['izq', 'der'] as const).map((lado) => {
+              const etiqueta = lado === 'izq' ? izq : der;
+              const v = valorLegible(r.respuestas[claveFila(`${fila}-${lado}`)]);
+              return v ? `${etiqueta}: ${v}` : '';
+            })
+          )
+        );
+        const conteo = [...new Set(todos.filter(Boolean))]
+          .map((etiqueta) => ({ etiqueta, cantidad: todos.filter((t) => t === etiqueta).length }))
+          .sort((a, b) => b.cantidad - a.cantidad);
+        if (conteo.length > 0) resumenes.push({ pregunta, conteo });
+        continue;
+      }
+
+      if (pregunta.tipo === 'matriz_columnas') {
+        const todos = respuestas.flatMap((r) =>
+          (pregunta.columnas ?? []).map((columna) => valorLegible(r.respuestas[claveFila(columna)]))
+        );
+        const conteo = [...new Set(todos.filter(Boolean))]
+          .map((etiqueta) => ({ etiqueta, cantidad: todos.filter((t) => t === etiqueta).length }))
+          .sort((a, b) => b.cantidad - a.cantidad);
+        if (conteo.length > 0) resumenes.push({ pregunta, conteo });
+        continue;
+      }
+
+      const todos = respuestas.flatMap((r) =>
+        opciones.map((fila) => valorLegible(r.respuestas[claveFila(fila)]))
+      );
+      const conteo = [...new Set(todos.filter(Boolean))]
+        .map((etiqueta) => ({ etiqueta, cantidad: todos.filter((t) => t === etiqueta).length }))
+        .sort((a, b) => b.cantidad - a.cantidad);
+      if (conteo.length > 0) resumenes.push({ pregunta, conteo });
+      continue;
+    }
+
+    // Listas, desplegables, opción múltiple y ranking: conteo por opción.
+    if (opciones.length > 0 || ['idioma', 'genero', 'si_no', 'ranking'].includes(pregunta.tipo)) {
+      const todos = respuestas.flatMap((r) => valoresPrincipales(r, pregunta));
+      const conteo = contar(
+        todos,
+        opciones.length > 0 ? opciones : [...new Set(todos)].sort()
+      );
+      resumenes.push({ pregunta, conteo });
+      continue;
     }
   }
 
@@ -99,8 +226,8 @@ function BloqueVersion({ version, respuestas }: { version: VersionHistorial; res
 
   const resumenes = calcularResumen(version.preguntas, respuestas);
   const textos = version.preguntas
-    .filter((p) => p.tipo === 'texto')
-    .filter((p) => respuestas.some((r) => String(r.respuestas[p.id] ?? '').trim().length > 0));
+    .filter((p) => TIPOS_TEXTO.includes(p.tipo) && p.tipo !== 'matriz_texto')
+    .filter((p) => respuestas.some((r) => valorLegible(r.respuestas[p.id]).trim().length > 0));
 
   return (
     <div className="flex flex-col gap-4">
@@ -126,8 +253,8 @@ function BloqueVersion({ version, respuestas }: { version: VersionHistorial; res
 
                 {promedio !== undefined && (
                   <div className="flex items-center gap-3">
-                    <span className="text-2xl font-semibold text-[#008751]">{promedio}</span>
-                    <span className="text-sm text-slate-500">de 5 en promedio</span>
+                    <span className="text-2xl font-semibold text-[#008751]">{promedio.valor}</span>
+                    <span className="text-sm text-slate-500">de {promedio.max} en promedio</span>
                   </div>
                 )}
 
@@ -150,10 +277,12 @@ function BloqueVersion({ version, respuestas }: { version: VersionHistorial; res
 
                 {filas && (
                   <div className="flex flex-col gap-1">
-                    {filas.map(({ fila, promedio: prom, total }) => (
+                    {filas.map(({ fila, promedio: prom, max, total }) => (
                       <div key={fila} className="flex items-center justify-between text-sm">
                         <span className="text-slate-700">{fila}</span>
-                        <span className="text-slate-500">{total > 0 ? `${prom} (${total})` : '—'}</span>
+                        <span className="text-slate-500">
+                          {total > 0 ? `${prom} de ${max} (${total})` : '—'}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -192,25 +321,42 @@ function BloqueVersion({ version, respuestas }: { version: VersionHistorial; res
           <div key={respuesta.id} className="bg-white border border-slate-200 rounded-md p-4">
             <p className="text-xs text-slate-400 mb-3">{formatearFecha(respuesta.fechaRespuesta)}</p>
             <div className="flex flex-col gap-2">
-              {version.preguntas.map((pregunta) =>
-                pregunta.tipo === 'matriz' ? (
-                  <div key={pregunta.id}>
-                    <p className="text-sm font-medium text-slate-500">{pregunta.texto}</p>
-                    {valorMatriz(respuesta, pregunta)
-                      .filter((m) => m.valor)
-                      .map((m) => (
-                        <p key={m.fila} className="text-sm text-[#1f2421]">
-                          {m.fila}: {m.valor}
-                        </p>
-                      ))}
-                  </div>
-                ) : (
-                  <div key={pregunta.id} className="flex gap-2 text-sm">
-                    <span className="text-slate-500">{pregunta.texto}</span>
-                    <span className="text-[#1f2421] font-medium">{valorSimple(respuesta, pregunta)}</span>
-                  </div>
-                )
-              )}
+              {version.preguntas
+                .filter((pregunta) => !esInformativa(pregunta.tipo))
+                .map((pregunta) => {
+                  const principal = valorLegible(respuesta.respuestas[pregunta.id]);
+                  const subs = subRespuestas(respuesta, pregunta).filter((s) => s.valor);
+
+                  if (!principal && subs.length === 0) {
+                    return (
+                      <div key={pregunta.id} className="flex gap-2 text-sm">
+                        <span className="text-slate-500">{pregunta.texto}</span>
+                        <span className="text-slate-300">Sin responder</span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={pregunta.id} className="text-sm">
+                      <div className="flex gap-2">
+                        <span className="text-slate-500">{pregunta.texto}</span>
+                        {principal && (
+                          <span className="text-[#1f2421] font-medium">{principal}</span>
+                        )}
+                      </div>
+                      {subs.length > 0 && (
+                        <ul className="mt-1 pl-4 border-l-2 border-slate-100">
+                          {subs.map((s) => (
+                            <li key={s.etiqueta} className="text-slate-600">
+                              <span className="text-slate-400">{s.etiqueta}: </span>
+                              {s.valor}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           </div>
         ))}

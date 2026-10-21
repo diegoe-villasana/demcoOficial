@@ -1,5 +1,6 @@
 import * as mammoth from 'mammoth';
 import { Encuesta, Pregunta } from '../db/schema';
+import { COLUMNAS_LIKERT, crearPreguntaPorTipo, detectarTipoDesdeEtiqueta } from './tiposPregunta';
 
 export async function extraerTextoDocx(archivo: File): Promise<string> {
   const buffer = await archivo.arrayBuffer();
@@ -10,33 +11,10 @@ export async function extraerTextoDocx(archivo: File): Promise<string> {
 const TIPO_PATTERN = /\[([^\]]+)\]\s*$/i;
 const OPCION_PATTERN = /^[-•*]\s+|\d+[.)]\s+|[a-zA-Z][.)]\s+/;
 
-const COLUMNAS_MATRIZ = [
-  'Muy en desacuerdo',
-  'En desacuerdo',
-  'Neutral',
-  'De acuerdo',
-  'Muy de acuerdo',
-];
-
-function detectarTipo(etiqueta: string): Pregunta['tipo'] {
-  const texto = etiqueta.toLowerCase();
-  if (/(matrix|matriz|grilla|cuadricula)/.test(texto)) return 'matriz';
-  if (/(multiple|opcion|opción|seleccion|selección|multi)/.test(texto)) return 'opcion_multiple';
-  if (/(escala|likert)/.test(texto)) return 'escala';
-  return 'texto';
-}
-
-export function etiquetaTipo(tipo: Pregunta['tipo']): string {
-  switch (tipo) {
-    case 'opcion_multiple':
-      return 'Múltiple';
-    case 'matriz':
-      return 'Matriz';
-    case 'escala':
-      return 'Escala';
-    default:
-      return 'Abierta';
-  }
+function sinEtiqueta(parrafo: string): { texto: string; etiqueta: string | null } {
+  const match = parrafo.match(TIPO_PATTERN);
+  if (!match) return { texto: parrafo, etiqueta: null };
+  return { texto: parrafo.replace(TIPO_PATTERN, '').trim(), etiqueta: match[1] };
 }
 
 export function convertirTextoEnEncuesta(texto: string): Encuesta {
@@ -58,21 +36,16 @@ export function convertirTextoEnEncuesta(texto: string): Encuesta {
       continue;
     }
 
-    const match = parrafo.match(TIPO_PATTERN);
-    let tipo: Pregunta['tipo'] = 'texto';
-    let textoPregunta = parrafo;
+    const { texto: textoPregunta, etiqueta } = sinEtiqueta(parrafo);
+    const tipo = etiqueta ? detectarTipoDesdeEtiqueta(etiqueta) : 'texto';
 
-    if (match) {
-      tipo = detectarTipo(match[1]);
-      textoPregunta = parrafo.replace(TIPO_PATTERN, '').trim();
+    // Partimos del catálogo para heredar columnas, escalas y formato; lo que
+    // venga en el documento (opciones) se encima encima.
+    actual = crearPreguntaPorTipo(tipo);
+    actual.texto = textoPregunta;
+    if (tipo === 'matriz' && !actual.columnas?.length) {
+      actual.columnas = [...COLUMNAS_LIKERT];
     }
-
-    actual = {
-      id: crypto.randomUUID(),
-      texto: textoPregunta,
-      tipo,
-      ...(tipo === 'matriz' ? { columnas: [...COLUMNAS_MATRIZ] } : {}),
-    };
     preguntas.push(actual);
   }
 

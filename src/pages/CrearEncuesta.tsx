@@ -3,17 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { FileUp, FileText, X, Trash2, Save, ArrowLeft } from 'lucide-react';
 import { Encuesta } from '../db/schema';
 import { guardarEncuestaCompleta } from '../services/encuestasService';
-import {
-  extraerTextoDocx,
-  convertirTextoEnEncuesta,
-  etiquetaTipo,
-} from '../services/parseWordEncuesta';
+import { extraerTextoDocx, convertirTextoEnEncuesta } from '../services/parseWordEncuesta';
+import { defDeTipo, etiquetaTipo, GrupoTipo } from '../services/tiposPregunta';
 
-const COLORES_TIPO: Record<string, string> = {
-  Múltiple: 'bg-blue-100 text-blue-700',
-  Abierta: 'bg-amber-100 text-amber-700',
-  Matriz: 'bg-purple-100 text-purple-700',
-  Escala: 'bg-teal-100 text-teal-700',
+const COLORES_GRUPO: Record<GrupoTipo, string> = {
+  predefinidas: 'bg-emerald-100 text-emerald-700',
+  unica: 'bg-teal-100 text-teal-700',
+  multiple: 'bg-blue-100 text-blue-700',
+  texto: 'bg-amber-100 text-amber-700',
+  numerico: 'bg-indigo-100 text-indigo-700',
+  matriz: 'bg-purple-100 text-purple-700',
+  especiales: 'bg-slate-100 text-slate-600',
 };
 
 export const CrearEncuesta: React.FC = () => {
@@ -111,7 +111,7 @@ export const CrearEncuesta: React.FC = () => {
                 {cargando ? 'Leyendo el documento...' : 'Subir archivo de Word (.docx)'}
               </p>
               <p className="text-sm text-slate-500 mt-1">
-                Marca cada pregunta con [Múltiple], [Abierta] o [Matriz] al final
+                Marca cada pregunta con su tipo entre corchetes, ej. [Matriz] o [Lista Desplegable]
               </p>
             </div>
           </label>
@@ -179,7 +179,7 @@ export const CrearEncuesta: React.FC = () => {
                     </div>
                     <span
                       className={`inline-block text-xs px-2 py-0.5 rounded-full mt-2 ${
-                        COLORES_TIPO[etiquetaTipo(pregunta.tipo)] ?? 'bg-slate-100 text-slate-600'
+                        COLORES_GRUPO[defDeTipo(pregunta.tipo).grupo]
                       }`}
                     >
                       {etiquetaTipo(pregunta.tipo)}

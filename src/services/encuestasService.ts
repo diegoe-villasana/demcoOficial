@@ -1,4 +1,4 @@
-import { getDB, Encuesta, RespuestaEncuesta, Pregunta, VersionHistorial } from '../db/schema';
+import { getDB, Encuesta, RespuestaEncuesta, Pregunta, VersionHistorial, ValorRespuesta } from '../db/schema';
 
 const SYNC_TAG = 'sync-encuestas';
 
@@ -106,7 +106,7 @@ export interface RespuestaRecibida {
   id: string;
   encuestaId: string;
   versionId?: string | null;
-  respuestas: Record<string, string | number>;
+  respuestas: Record<string, ValorRespuesta>;
   fechaRespuesta: string;
   recibidoEn: string;
 }

@@ -10,44 +10,89 @@ import {
   AlertCircle,
   GitBranch,
 } from 'lucide-react';
-import { Pregunta } from '../db/schema';
+import { FormatoNumero, Pregunta, TipoPregunta } from '../db/schema';
+import { obtenerEncuesta, guardarEncuestaCompleta } from '../services/encuestasService';
 import {
-  obtenerEncuesta,
-  guardarEncuestaCompleta,
-} from '../services/encuestasService';
+  FORMATOS_NUMERO,
+  GRUPOS_TIPOS,
+  crearPreguntaPorTipo,
+  defDeTipo,
+  esInformativa,
+  etiquetaTipo,
+  esMatriz,
+  rangoEscala,
+  TIPOS_MATRIZ_REQUIEREN_COLUMNAS,
+  usaColumnas,
+  usaOpciones,
+} from '../services/tiposPregunta';
 
-const ETIQUETAS_TIPO: Record<Pregunta['tipo'], string> = {
-  texto: 'Abierta',
-  opcion_multiple: 'Múltiple',
-  escala: 'Escala',
-  matriz: 'Matriz',
+const TIPOS_OPCIONES_PLACEHOLDER: Partial<Record<TipoPregunta, string>> = {
+  desplegable: 'Opción',
+  opcion_unica: 'Opción',
+  genero: 'Opción',
+  si_no: 'Opción',
+  idioma: 'Idioma',
+  ranking: 'Elemento',
+  textos_multiples: 'Renglón',
+  numero_multiple: 'Renglón',
 };
 
-const COLUMNAS_MATRIZ_DEFAULT = [
-  'Muy en desacuerdo',
-  'En desacuerdo',
-  'Neutral',
-  'De acuerdo',
-  'Muy de acuerdo',
-];
-
-function nuevaPregunta(tipo: Pregunta['tipo'] = 'texto'): Pregunta {
-  return {
-    id: crypto.randomUUID(),
-    texto: '',
-    tipo,
-    ...(tipo === 'opcion_multiple' ? { opciones: [''] } : {}),
-    ...(tipo === 'matriz' ? { opciones: [''], columnas: [...COLUMNAS_MATRIZ_DEFAULT] } : {}),
-  };
+function placeholderOpciones(tipo: TipoPregunta): string {
+  if (esMatriz(tipo)) return 'Fila';
+  return TIPOS_OPCIONES_PLACEHOLDER[tipo] ?? 'Opción';
 }
+
+function nuevaPregunta(tipo: TipoPregunta = 'texto'): Pregunta {
+  return crearPreguntaPorTipo(tipo);
+}
+
+interface EditorListaProps {
+  etiqueta: string;
+  valores: string[];
+  placeholder: string;
+  onCambiar: (valores: string[]) => void;
+}
+
+/** Editor de una lista de cadenas (opciones, filas o columnas). */
+const EditorLista: React.FC<EditorListaProps> = ({ etiqueta, valores, placeholder, onCambiar }) => (
+  <div>
+    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">{etiqueta}</p>
+    {valores.map((valor, i) => (
+      <div key={i} className="flex items-center gap-2 mb-1">
+        <input
+          value={valor}
+          onChange={(e) => onCambiar(valores.map((v, j) => (j === i ? e.target.value : v)))}
+          placeholder={`${placeholder} ${i + 1}`}
+          className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+        />
+        <button
+          onClick={() => onCambiar(valores.filter((_, j) => j !== i))}
+          className="text-slate-300 hover:text-red-500 shrink-0"
+          title={`Eliminar ${placeholder.toLowerCase()}`}
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    ))}
+    <button
+      onClick={() => onCambiar([...valores, ''])}
+      className="text-sm text-[#008751] font-medium hover:underline mt-1"
+    >
+      + Agregar {placeholder.toLowerCase()}
+    </button>
+  </div>
+);
+
+const campoCls =
+  'border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]/30';
+
+const etiquetaCls = 'text-xs font-medium text-slate-500 uppercase tracking-wide';
 
 export const EditarEncuesta: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const esNueva = !id || id === 'nueva';
 
-  // Datos en el servidor (si es edición): deciden si el guardado edita en
-  // sitio o hace fork.
   const [existente, setExistente] = useState<{
     id: string;
     versionId?: string;
@@ -88,61 +133,22 @@ export const EditarEncuesta: React.FC = () => {
     setPreguntas((prev) => prev.map((p) => (p.id === pid ? { ...p, ...cambios } : p)));
   };
 
-  const cambiarTipo = (pid: string, tipo: Pregunta['tipo']) => {
+  // Cambiar de tipo conserva el texto y reaplica los valores por defecto del
+  // catálogo, para no dejar campos huérfanos del tipo anterior.
+  const cambiarTipo = (pid: string, tipo: TipoPregunta) => {
     setPreguntas((prev) =>
       prev.map((p) => {
         if (p.id !== pid) return p;
-        const base: Pregunta = { id: p.id, texto: p.texto, tipo };
-        if (tipo === 'opcion_multiple') base.opciones = p.opciones?.length ? p.opciones : [''];
-        if (tipo === 'matriz') {
-          base.opciones = p.opciones?.length ? p.opciones : [''];
-          base.columnas = p.columnas?.length ? p.columnas : [...COLUMNAS_MATRIZ_DEFAULT];
-        }
+        const base = crearPreguntaPorTipo(tipo, p.id);
+        base.texto = p.texto;
         return base;
       })
     );
   };
 
-  const actualizarOpcion = (pid: string, i: number, valor: string) => {
-    setPreguntas((prev) =>
-      prev.map((p) =>
-        p.id === pid ? { ...p, opciones: (p.opciones ?? []).map((o, j) => (j === i ? valor : o)) } : p
-      )
-    );
-  };
-
-  const actualizarColumna = (pid: string, i: number, valor: string) => {
-    setPreguntas((prev) =>
-      prev.map((p) =>
-        p.id === pid
-          ? { ...p, columnas: (p.columnas ?? []).map((o, j) => (j === i ? valor : o)) }
-          : p
-      )
-    );
-  };
-
-  const agregarOpcion = (pid: string) => {
-    setPreguntas((prev) => prev.map((p) => (p.id === pid ? { ...p, opciones: [...(p.opciones ?? []), ''] } : p)));
-  };
-
-  const eliminarOpcion = (pid: string, i: number) => {
-    setPreguntas((prev) =>
-      prev.map((p) =>
-        p.id === pid ? { ...p, opciones: (p.opciones ?? []).filter((_, j) => j !== i) } : p
-      )
-    );
-  };
-
-  const agregarColumna = (pid: string) => {
-    setPreguntas((prev) => prev.map((p) => (p.id === pid ? { ...p, columnas: [...(p.columnas ?? []), ''] } : p)));
-  };
-
-  const eliminarColumna = (pid: string, i: number) => {
-    setPreguntas((prev) =>
-      prev.map((p) =>
-        p.id === pid ? { ...p, columnas: (p.columnas ?? []).filter((_, j) => j !== i) } : p
-      )
-    );
+  const agregarPregunta = (tipo: TipoPregunta) => {
+    setPreguntas((prev) => [...prev, nuevaPregunta(tipo)]);
+    setError(null);
   };
 
   const moverPregunta = (i: number, dir: -1 | 1) => {
@@ -155,18 +161,44 @@ export const EditarEncuesta: React.FC = () => {
     });
   };
 
+  function validarPregunta(p: Pregunta, indice: number): string | null {
+    const n = indice + 1;
+    const nombre = etiquetaTipo(p.tipo);
+    if (!p.texto.trim()) {
+      return esInformativa(p.tipo)
+        ? `El bloque de texto ${n} no tiene contenido.`
+        : `La pregunta ${n} no tiene texto.`;
+    }
+    const conOpciones = (p.opciones ?? []).filter((o) => o.trim());
+    if (usaOpciones(p.tipo) && conOpciones.length === 0) {
+      return `La pregunta ${n} (${nombre}) necesita al menos una opción.`;
+    }
+    if (TIPOS_MATRIZ_REQUIEREN_COLUMNAS.includes(p.tipo) && (p.columnas ?? []).filter((c) => c.trim()).length === 0) {
+      return `La pregunta ${n} (${nombre}) necesita al menos una columna.`;
+    }
+    if (usaOpciones(p.tipo)) {
+      const repetidas = conOpciones.filter(
+        (o, i) => conOpciones.findIndex((x) => x.toLowerCase() === o.toLowerCase()) !== i
+      );
+      if (repetidas.length > 0) {
+        return `La pregunta ${n} (${nombre}) tiene opciones repetidas: ${repetidas.join(', ')}.`;
+      }
+    }
+    if (p.tipo === 'escala_n' || p.tipo === 'matriz_escala') {
+      const { min, max } = rangoEscala(p);
+      if (max <= min) {
+        return `La pregunta ${n} (${nombre}) necesita un máximo mayor que el mínimo.`;
+      }
+    }
+    return null;
+  }
+
   const validarLocal = (): string | null => {
     if (!titulo.trim()) return 'Escribe un título.';
     if (preguntas.length === 0) return 'Agrega al menos una pregunta.';
     for (let i = 0; i < preguntas.length; i++) {
-      const p = preguntas[i];
-      if (!p.texto.trim()) return `La pregunta ${i + 1} no tiene texto.`;
-      if (p.tipo === 'opcion_multiple' && (p.opciones ?? []).filter((o) => o.trim()).length === 0) {
-        return `La pregunta ${i + 1} (Múltiple) necesita opciones.`;
-      }
-      if (p.tipo === 'matriz' && (p.opciones ?? []).filter((o) => o.trim()).length === 0) {
-        return `La pregunta ${i + 1} (Matriz) necesita filas.`;
-      }
+      const error = validarPregunta(preguntas[i], i);
+      if (error) return error;
     }
     return null;
   };
@@ -181,22 +213,23 @@ export const EditarEncuesta: React.FC = () => {
     setGuardando(true);
     setError(null);
 
+    const limpiar = (valores?: string[]) =>
+      valores?.map((v) => v.trim()).filter(Boolean);
+
     const draft = {
       titulo: titulo.trim(),
       descripcion: descripcion.trim() || undefined,
       preguntas: preguntas.map((p) => ({
         ...p,
         texto: p.texto.trim(),
-        opciones: p.opciones?.filter((o) => o.trim()).map((o) => o.trim()),
-        columnas: p.columnas?.filter((o) => o.trim()).map((o) => o.trim()),
+        opciones: limpiar(p.opciones),
+        columnas: limpiar(p.columnas),
       })),
     };
 
     try {
       let destino: string;
       if (esNueva) {
-        // Encuesta nueva: guardarEncuestaCompleta hace POST / crea v1 y
-        // refresca el caché local con el id que devolvió el servidor.
         const guardada = await guardarEncuestaCompleta(draft, undefined);
         destino = `/home/encuestas/${guardada.id}`;
       } else {
@@ -215,7 +248,7 @@ export const EditarEncuesta: React.FC = () => {
     return <p className="text-slate-500">Cargando encuesta...</p>;
   }
 
-  const hacerFork = !esNueva && (existente?.sellada === true);
+  const hacerFork = !esNueva && existente?.sellada === true;
 
   return (
     <div className="max-w-3xl">
@@ -232,9 +265,9 @@ export const EditarEncuesta: React.FC = () => {
       <p className="text-slate-500 mb-6">
         {esNueva
           ? 'Diseña la encuesta desde aquí, sin Word'
-: `Versión activa v${existente?.versionNumero ?? '?'} · ${
-                  hacerFork ? 'sellada (ya tiene respuestas)' : 'sin respuestas aún'
-                }`}
+          : `Versión activa v${existente?.versionNumero ?? '?'} · ${
+              hacerFork ? 'sellada (ya tiene respuestas)' : 'sin respuestas aún'
+            }`}
       </p>
 
       {hacerFork && (
@@ -284,12 +317,48 @@ export const EditarEncuesta: React.FC = () => {
           <h2 className="font-medium text-[#1f2421]">
             Preguntas <span className="text-slate-400 font-normal">({preguntas.length})</span>
           </h2>
-          <button
-            onClick={() => setPreguntas((prev) => [...prev, nuevaPregunta('texto')])}
-            className="flex items-center gap-1 text-sm text-[#008751] font-medium hover:underline"
-          >
-            <Plus className="w-4 h-4" /> Agregar pregunta
-          </button>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-md p-4">
+          <p className={`${etiquetaCls} mb-2`}>Agregar pregunta</p>
+
+          <p className="text-xs text-slate-500 mb-1">
+            Máscaras predefinidas (ya vienen con su contenido, sólo edita el texto):
+          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {GRUPOS_TIPOS.find((g) => g.id === 'predefinidas')!.tipos.map((def) => (
+              <button
+                key={def.tipo}
+                onClick={() => agregarPregunta(def.tipo)}
+                title={def.descripcion}
+                className="flex items-center gap-1 border border-slate-300 bg-white hover:border-[#008751] hover:text-[#008751] rounded px-3 py-1.5 text-sm text-slate-600"
+              >
+                <Plus className="w-3.5 h-3.5" /> {def.etiqueta}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            {GRUPOS_TIPOS.filter((g) => g.id !== 'predefinidas').map((grupo) => (
+              <div key={grupo.id} className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 w-32 shrink-0">{grupo.etiqueta}</span>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) agregarPregunta(e.target.value as TipoPregunta);
+                  }}
+                  className={`flex-1 ${campoCls}`}
+                >
+                  <option value="">Agregar…</option>
+                  {grupo.tipos.map((def) => (
+                    <option key={def.tipo} value={def.tipo}>
+                      {def.etiqueta} — {def.descripcion}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
         </div>
 
         {preguntas.length === 0 && (
@@ -298,151 +367,314 @@ export const EditarEncuesta: React.FC = () => {
           </div>
         )}
 
-        {preguntas.map((pregunta, i) => (
-          <div key={pregunta.id} className="bg-white border border-slate-200 rounded-md p-4">
-            <div className="flex items-start gap-3">
-              <span className="text-sm font-semibold text-slate-400 mt-2">{i + 1}.</span>
-              <div className="flex-1">
-                <input
-                  value={pregunta.texto}
-                  onChange={(e) => cambiarPregunta(pregunta.id, { texto: e.target.value })}
-                  placeholder="Escribe la pregunta..."
-                  className="w-full border border-transparent focus:border-slate-300 rounded px-2 py-1 -mx-2 font-medium text-[#1f2421] focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
-                />
+        {preguntas.map((pregunta, i) => {
+          const def = defDeTipo(pregunta.tipo);
+          const conOpciones = usaOpciones(pregunta.tipo);
+          const conColumnas = usaColumnas(pregunta.tipo);
+          const matriz = esMatriz(pregunta.tipo);
 
-                <select
-                  value={pregunta.tipo}
-                  onChange={(e) => cambiarTipo(pregunta.id, e.target.value as Pregunta['tipo'])}
-                  className="mt-2 border border-slate-300 rounded px-2 py-1 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
-                >
-                  {(Object.keys(ETIQUETAS_TIPO) as Pregunta['tipo'][]).map((t) => (
-                    <option key={t} value={t}>
-                      {ETIQUETAS_TIPO[t]}
-                    </option>
-                  ))}
-                </select>
+          return (
+            <div key={pregunta.id} className="bg-white border border-slate-200 rounded-md p-4">
+              <div className="flex items-start gap-3">
+                <span className="text-sm font-semibold text-slate-400 mt-2">{i + 1}.</span>
+                <div className="flex-1 min-w-0">
+                  <input
+                    value={pregunta.texto}
+                    onChange={(e) => cambiarPregunta(pregunta.id, { texto: e.target.value })}
+                    placeholder={
+                      esInformativa(pregunta.tipo)
+                        ? 'Escribe el texto que se mostrará...'
+                        : 'Escribe la pregunta...'
+                    }
+                    className="w-full border border-transparent focus:border-slate-300 rounded px-2 py-1 -mx-2 font-medium text-[#1f2421] focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+                  />
 
-                {pregunta.tipo === 'opcion_multiple' && (
-                  <div className="mt-3">
-                    {pregunta.opciones?.map((opcion, j) => (
-                      <div key={j} className="flex items-center gap-2 mb-1">
-                        <input
-                          value={opcion}
-                          onChange={(e) => actualizarOpcion(pregunta.id, j, e.target.value)}
-                          placeholder={`Opción ${j + 1}`}
-                          className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
-                        />
-                        <button
-                          onClick={() => eliminarOpcion(pregunta.id, j)}
-                          className="text-slate-300 hover:text-red-500 shrink-0"
-                          title="Eliminar opción"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                  <select
+                    value={pregunta.tipo}
+                    onChange={(e) => cambiarTipo(pregunta.id, e.target.value as TipoPregunta)}
+                    className="mt-2 border border-slate-300 rounded px-2 py-1 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+                  >
+                    {GRUPOS_TIPOS.map((grupo) => (
+                      <optgroup key={grupo.id} label={grupo.etiqueta}>
+                        {grupo.tipos.map((t) => (
+                          <option key={t.tipo} value={t.tipo}>
+                            {t.etiqueta}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
-                    <button
-                      onClick={() => agregarOpcion(pregunta.id)}
-                      className="text-sm text-[#008751] font-medium hover:underline mt-1"
-                    >
-                      + Agregar opción
-                    </button>
-                  </div>
-                )}
+                  </select>
+                  <p className="mt-1 text-xs text-slate-400">{def.descripcion}</p>
 
-                {pregunta.tipo === 'matriz' && (
-                  <div className="mt-3 flex flex-col gap-3">
-                    <div>
-                      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Filas</p>
-                      {pregunta.opciones?.map((fila, j) => (
-                        <div key={j} className="flex items-center gap-2 mb-1">
+                  {!esInformativa(pregunta.tipo) && (
+                    <label className="flex items-center gap-2 mt-2 text-sm text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={pregunta.obligatorio ?? false}
+                        onChange={(e) => cambiarPregunta(pregunta.id, { obligatorio: e.target.checked })}
+                      />
+                      Respuesta obligatoria
+                    </label>
+                  )}
+
+                  <div className="mt-3 flex flex-col gap-4">
+                    {conOpciones && (
+                      <EditorLista
+                        etiqueta={
+                          matriz && usaColumnas(pregunta.tipo) ? 'Opciones (comunes)' : matriz ? 'Filas' : 'Opciones'
+                        }
+                        valores={pregunta.opciones ?? []}
+                        placeholder={placeholderOpciones(pregunta.tipo)}
+                        onCambiar={(opciones) => cambiarPregunta(pregunta.id, { opciones })}
+                      />
+                    )}
+
+                    {conColumnas && (
+                      <EditorLista
+                        etiqueta={pregunta.tipo === 'matriz_columnas' ? 'Columnas a calificar' : 'Columnas'}
+                        valores={pregunta.columnas ?? []}
+                        placeholder="Columna"
+                        onCambiar={(columnas) => cambiarPregunta(pregunta.id, { columnas })}
+                      />
+                    )}
+
+                    {(pregunta.tipo === 'escala' || pregunta.tipo === 'escala_n') && (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Mínimo</p>
                           <input
-                            value={fila}
-                            onChange={(e) => actualizarOpcion(pregunta.id, j, e.target.value)}
-                            placeholder={`Fila ${j + 1}`}
-                            className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+                            type="number"
+                            value={pregunta.minimo ?? 1}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, { minimo: Number(e.target.value) })
+                            }
+                            className={`${campoCls} w-24`}
                           />
-                          <button
-                            onClick={() => eliminarOpcion(pregunta.id, j)}
-                            className="text-slate-300 hover:text-red-500 shrink-0"
-                            title="Eliminar fila"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
                         </div>
-                      ))}
-                      <button
-                        onClick={() => agregarOpcion(pregunta.id)}
-                        className="text-sm text-[#008751] font-medium hover:underline mt-1"
-                      >
-                        + Agregar fila
-                      </button>
-                    </div>
-                    <div>
-                      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Columnas</p>
-                      {pregunta.columnas?.map((columna, j) => (
-                        <div key={j} className="flex items-center gap-2 mb-1">
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Máximo</p>
                           <input
-                            value={columna}
-                            onChange={(e) => actualizarColumna(pregunta.id, j, e.target.value)}
-                            placeholder={`Columna ${j + 1}`}
-                            className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+                            type="number"
+                            value={pregunta.maximo ?? 5}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, { maximo: Number(e.target.value) })
+                            }
+                            className={`${campoCls} w-24`}
                           />
-                          <button
-                            onClick={() => eliminarColumna(pregunta.id, j)}
-                            className="text-slate-300 hover:text-red-500 shrink-0"
-                            title="Eliminar columna"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
                         </div>
-                      ))}
-                      <button
-                        onClick={() => agregarColumna(pregunta.id)}
-                        className="text-sm text-[#008751] font-medium hover:underline mt-1"
-                      >
-                        + Agregar columna
-                      </button>
-                    </div>
+                        <p className="text-xs text-slate-400 pb-2">
+                          Se responde de {rangoEscala(pregunta).min} a {rangoEscala(pregunta).max}
+                        </p>
+                      </div>
+                    )}
+
+                    {pregunta.tipo === 'numero' && (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Tipo de respuesta</p>
+                          <select
+                            value={pregunta.formato ?? 'entero'}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, { formato: e.target.value as FormatoNumero })
+                            }
+                            className={campoCls}
+                          >
+                            {FORMATOS_NUMERO.map((f) => (
+                              <option key={f.valor} value={f.valor}>
+                                {f.etiqueta}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Mínimo</p>
+                          <input
+                            type="number"
+                            value={pregunta.minimo ?? ''}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, {
+                                minimo: e.target.value === '' ? undefined : Number(e.target.value),
+                              })
+                            }
+                            placeholder="Sin mínimo"
+                            className={`${campoCls} w-28`}
+                          />
+                        </div>
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Máximo</p>
+                          <input
+                            type="number"
+                            value={pregunta.maximo ?? ''}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, {
+                                maximo: e.target.value === '' ? undefined : Number(e.target.value),
+                              })
+                            }
+                            placeholder="Sin máximo"
+                            className={`${campoCls} w-28`}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {pregunta.tipo === 'matriz_numero' && (
+                      <div>
+                        <p className={`${etiquetaCls} mb-1`}>Tipo de respuesta</p>
+                        <select
+                          value={pregunta.formato ?? 'entero'}
+                          onChange={(e) =>
+                            cambiarPregunta(pregunta.id, { formato: e.target.value as FormatoNumero })
+                          }
+                          className={campoCls}
+                        >
+                          {FORMATOS_NUMERO.map((f) => (
+                            <option key={f.valor} value={f.valor}>
+                              {f.etiqueta}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {pregunta.tipo === 'matriz_doble_eje' && (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Extremo izquierdo</p>
+                          <input
+                            value={pregunta.ejeIzquierdo ?? ''}
+                            onChange={(e) => cambiarPregunta(pregunta.id, { ejeIzquierdo: e.target.value })}
+                            className={`${campoCls} w-40`}
+                          />
+                        </div>
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Extremo derecho</p>
+                          <input
+                            value={pregunta.ejeDerecho ?? ''}
+                            onChange={(e) => cambiarPregunta(pregunta.id, { ejeDerecho: e.target.value })}
+                            className={`${campoCls} w-40`}
+                          />
+                        </div>
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Puntos</p>
+                          <input
+                            type="number"
+                            min={2}
+                            value={pregunta.puntos ?? 5}
+                            onChange={(e) => cambiarPregunta(pregunta.id, { puntos: Number(e.target.value) })}
+                            className={`${campoCls} w-20`}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {pregunta.tipo === 'ranking' && (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Extremo izquierdo</p>
+                          <input
+                            value={pregunta.ejeIzquierdo ?? ''}
+                            onChange={(e) => cambiarPregunta(pregunta.id, { ejeIzquierdo: e.target.value })}
+                            className={`${campoCls} w-40`}
+                          />
+                        </div>
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Extremo derecho</p>
+                          <input
+                            value={pregunta.ejeDerecho ?? ''}
+                            onChange={(e) => cambiarPregunta(pregunta.id, { ejeDerecho: e.target.value })}
+                            className={`${campoCls} w-40`}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {(pregunta.tipo === 'opcion_multiple' ||
+                      pregunta.tipo === 'opcion_multiple_comentario') && (
+                      <label className="flex items-center gap-2 text-sm text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={pregunta.otro ?? false}
+                          onChange={(e) => cambiarPregunta(pregunta.id, { otro: e.target.checked })}
+                        />
+                        Incluir opción libre “Otro”
+                      </label>
+                    )}
+
+                    {pregunta.tipo === 'archivo' && (
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="flex-1 min-w-[220px]">
+                          <p className={`${etiquetaCls} mb-1`}>Extensiones permitidas</p>
+                          <input
+                            value={(pregunta.extensiones ?? []).join(', ')}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, {
+                                extensiones: e.target.value
+                                  .split(',')
+                                  .map((x) => x.trim().replace(/^\./, ''))
+                                  .filter(Boolean),
+                              })
+                            }
+                            placeholder="pdf, jpg, png"
+                            className={`${campoCls} w-full`}
+                          />
+                        </div>
+                        <div>
+                          <p className={`${etiquetaCls} mb-1`}>Máximo (MB)</p>
+                          <input
+                            type="number"
+                            min={1}
+                            value={pregunta.tamanoMaximo ?? 10}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, { tamanoMaximo: Number(e.target.value) })
+                            }
+                            className={`${campoCls} w-24`}
+                          />
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-slate-600 pb-2">
+                          <input
+                            type="checkbox"
+                            checked={pregunta.variosArchivos ?? false}
+                            onChange={(e) =>
+                              cambiarPregunta(pregunta.id, { variosArchivos: e.target.checked })
+                            }
+                          />
+                          Varios archivos
+                        </label>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </div>
 
-              {pregunta.tipo === 'escala' && (
-                <span className="text-xs text-slate-400 mt-2 shrink-0">
-                  Se responde con 1 a 5
-                </span>
-              )}
+                <div className="flex flex-col gap-1 shrink-0 mt-1">
+                  <button
+                    onClick={() => moverPregunta(i, -1)}
+                    disabled={i === 0}
+                    className="text-slate-300 hover:text-[#1f2421] disabled:opacity-30"
+                    title="Subir pregunta"
+                  >
+                    <ChevronUp className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => moverPregunta(i, 1)}
+                    disabled={i === preguntas.length - 1}
+                    className="text-slate-300 hover:text-[#1f2421] disabled:opacity-30"
+                    title="Bajar pregunta"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+                </div>
 
-              <div className="flex flex-col gap-1 shrink-0 mt-1">
                 <button
-                  onClick={() => moverPregunta(i, -1)}
-                  disabled={i === 0}
-                  className="text-slate-300 hover:text-[#1f2421] disabled:opacity-30"
-                  title="Subir pregunta"
+                  onClick={() => setPreguntas((prev) => prev.filter((p) => p.id !== pregunta.id))}
+                  className="text-slate-300 hover:text-red-500 shrink-0 mt-1"
+                  title="Eliminar pregunta"
                 >
-                  <ChevronUp className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => moverPregunta(i, 1)}
-                  disabled={i === preguntas.length - 1}
-                  className="text-slate-300 hover:text-[#1f2421] disabled:opacity-30"
-                  title="Bajar pregunta"
-                >
-                  <ChevronDown className="w-4 h-4" />
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
-
-              <button
-                onClick={() => setPreguntas((prev) => prev.filter((p) => p.id !== pregunta.id))}
-                className="text-slate-300 hover:text-red-500 shrink-0 mt-1"
-                title="Eliminar pregunta"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="flex gap-3">
