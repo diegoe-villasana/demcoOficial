@@ -51,10 +51,12 @@ export async function inicializarEncuestas(): Promise<void> {
   }
 
   // Sin caché previo y sin backend: fallback mock para que la app siga usable.
+  // Se marcan como `mock` para que las estadísticas no los cuenten como
+  // encuestas reales.
   const existentes = await db.getAll('encuestas');
   if (existentes.length === 0) {
     for (const encuesta of mockEncuestas) {
-      await db.put('encuestas', encuesta);
+      await db.put('encuestas', { ...encuesta, mock: true });
     }
   }
 }

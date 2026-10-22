@@ -99,6 +99,17 @@ export interface Encuesta {
   versionNumero?: number;
   sellada?: boolean;
   totalRespuestas?: number;
+  /** Fecha de creación de la encuesta (la envía el backend). */
+  creadaEn?: string;
+  /** Fecha de la última respuesta recibida (la envía el backend). */
+  ultimaRespuesta?: string | null;
+  /** Destinatarios que recibieron la encuesta por correo (lo envía el backend). */
+  correosEnviados?: number;
+  /**
+   * Datos de ejemplo que se siembran cuando no hay backend (para que la app
+   * siga siendo usable). No son datos reales: las estadísticas los ignoran.
+   */
+  mock?: boolean;
 }
 
 // Historial de versiones que devuelve GET /:id/versiones.
