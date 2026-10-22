@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -10,8 +10,10 @@ import {
   AlertCircle,
   GitBranch,
 } from 'lucide-react';
-import { FormatoNumero, Pregunta, TipoPregunta } from '../db/schema';
+import { FormatoNumero, Pregunta, Seccion, TipoPregunta } from '../db/schema';
 import { obtenerEncuesta, guardarEncuestaCompleta } from '../services/encuestasService';
+import { SeccionesEditor } from '../components/SeccionesEditor';
+import { agruparPorSeccion, moverEnSuGrupo, seccionesValidas } from '../services/secciones';
 import {
   FORMATOS_NUMERO,
   GRUPOS_TIPOS,
@@ -103,6 +105,7 @@ export const EditarEncuesta: React.FC = () => {
   const [titulo, setTitulo] = useState('');
   const [descripcion, setDescripcion] = useState('');
   const [preguntas, setPreguntas] = useState<Pregunta[]>([]);
+  const [secciones, setSecciones] = useState<Seccion[]>([]);
   const [cargando, setCargando] = useState(esNueva ? false : true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +128,7 @@ export const EditarEncuesta: React.FC = () => {
       setTitulo(encuesta.titulo);
       setDescripcion(encuesta.descripcion ?? '');
       setPreguntas(encuesta.preguntas.map((p) => ({ ...p })));
+      setSecciones(seccionesValidas(encuesta.secciones));
       setCargando(false);
     })();
   }, [id, esNueva]);
@@ -132,6 +136,44 @@ export const EditarEncuesta: React.FC = () => {
   const cambiarPregunta = (pid: string, cambios: Partial<Pregunta>) => {
     setPreguntas((prev) => prev.map((p) => (p.id === pid ? { ...p, ...cambios } : p)));
   };
+
+  // Mete o saca una pregunta de una sección. Sin sección = undefined.
+  const asignarPregunta = (pid: string, seccionId: string | undefined) => {
+    setPreguntas((prev) =>
+      prev.map((p) => {
+        if (p.id !== pid) return p;
+        if (seccionId) return { ...p, seccionId };
+        const { seccionId: _fuera, ...resto } = p;
+        return resto;
+      })
+    );
+  };
+
+  // Las preguntas se muestran agrupadas por sección; dentro de cada grupo
+  // conservan el orden en que están en el arreglo.
+  const grupos = useMemo(() => agruparPorSeccion(preguntas, secciones), [preguntas, secciones]);
+
+  // Número con el que se ve cada pregunta: su lugar en el orden mostrado
+  // (secciones primero, y dentro de cada una el orden del arreglo).
+  const indiceDe = useMemo(() => {
+    const mapa = new Map<string, number>();
+    let n = 0;
+    for (const grupo of grupos) {
+      for (const p of grupo.preguntas) mapa.set(p.id, n++);
+    }
+    return mapa;
+  }, [grupos]);
+
+  // Si la pregunta puede subir o bajar dentro de su grupo.
+  const limites = useMemo(() => {
+    const mapa = new Map<string, { arriba: boolean; abajo: boolean }>();
+    for (const grupo of grupos) {
+      grupo.preguntas.forEach((p, i) => {
+        mapa.set(p.id, { arriba: i > 0, abajo: i < grupo.preguntas.length - 1 });
+      });
+    }
+    return mapa;
+  }, [grupos]);
 
   // Cambiar de tipo conserva el texto y reaplica los valores por defecto del
   // catálogo, para no dejar campos huérfanos del tipo anterior.
@@ -141,24 +183,27 @@ export const EditarEncuesta: React.FC = () => {
         if (p.id !== pid) return p;
         const base = crearPreguntaPorTipo(tipo, p.id);
         base.texto = p.texto;
+        if (p.seccionId) base.seccionId = p.seccionId;
         return base;
       })
     );
   };
 
   const agregarPregunta = (tipo: TipoPregunta) => {
-    setPreguntas((prev) => [...prev, nuevaPregunta(tipo)]);
+    setPreguntas((prev) => {
+      const nueva = nuevaPregunta(tipo);
+      // Si ya hay secciones, la pregunta nueva entra en la última: así el
+      // autor va llenando el tramo que está armando.
+      const ultima = secciones[secciones.length - 1];
+      if (ultima) nueva.seccionId = ultima.id;
+      return [...prev, nueva];
+    });
     setError(null);
   };
 
-  const moverPregunta = (i: number, dir: -1 | 1) => {
-    setPreguntas((prev) => {
-      const j = i + dir;
-      if (j < 0 || j >= prev.length) return prev;
-      const copia = [...prev];
-      [copia[i], copia[j]] = [copia[j], copia[i]];
-      return copia;
-    });
+  // Sube o baja la pregunta dentro de su propio grupo (sección).
+  const moverPregunta = (preguntaId: string, dir: -1 | 1) => {
+    setPreguntas((prev) => moverEnSuGrupo(prev, preguntaId, dir));
   };
 
   function validarPregunta(p: Pregunta, indice: number): string | null {
@@ -196,6 +241,9 @@ export const EditarEncuesta: React.FC = () => {
   const validarLocal = (): string | null => {
     if (!titulo.trim()) return 'Escribe un título.';
     if (preguntas.length === 0) return 'Agrega al menos una pregunta.';
+    for (const [i, seccion] of secciones.entries()) {
+      if (!seccion.titulo.trim()) return `La sección ${i + 1} necesita un título.`;
+    }
     for (let i = 0; i < preguntas.length; i++) {
       const error = validarPregunta(preguntas[i], i);
       if (error) return error;
@@ -216,14 +264,23 @@ export const EditarEncuesta: React.FC = () => {
     const limpiar = (valores?: string[]) =>
       valores?.map((v) => v.trim()).filter(Boolean);
 
+    const idsSeccion = new Set(secciones.map((s) => s.id));
+
     const draft = {
       titulo: titulo.trim(),
       descripcion: descripcion.trim() || undefined,
       preguntas: preguntas.map((p) => ({
         ...p,
         texto: p.texto.trim(),
+        // Una pregunta que apunta a una sección borrada se queda sin sección.
+        seccionId: p.seccionId && idsSeccion.has(p.seccionId) ? p.seccionId : undefined,
         opciones: limpiar(p.opciones),
         columnas: limpiar(p.columnas),
+      })),
+      secciones: secciones.map((s) => ({
+        id: s.id,
+        titulo: s.titulo.trim(),
+        descripcion: s.descripcion?.trim() || undefined,
       })),
     };
 
@@ -319,6 +376,13 @@ export const EditarEncuesta: React.FC = () => {
           </h2>
         </div>
 
+        <SeccionesEditor
+          secciones={secciones}
+          preguntas={preguntas}
+          onCambiarSecciones={setSecciones}
+          onAsignarPregunta={asignarPregunta}
+        />
+
         <div className="bg-slate-50 border border-slate-200 rounded-md p-4">
           <p className={`${etiquetaCls} mb-2`}>Agregar pregunta</p>
 
@@ -367,13 +431,31 @@ export const EditarEncuesta: React.FC = () => {
           </div>
         )}
 
-        {preguntas.map((pregunta, i) => {
-          const def = defDeTipo(pregunta.tipo);
-          const conOpciones = usaOpciones(pregunta.tipo);
-          const conColumnas = usaColumnas(pregunta.tipo);
-          const matriz = esMatriz(pregunta.tipo);
+        {grupos.map((grupo) => (
+          <div key={grupo.seccion?.id ?? 'sin-seccion'} className="flex flex-col gap-3">
+            {grupo.seccion && (
+              <div className="flex items-center gap-2 mt-2">
+                <span className="w-1.5 h-6 rounded bg-[#008751]" />
+                <div>
+                  <p className="font-medium text-[#1f2421]">{grupo.seccion.titulo}</p>
+                  {grupo.seccion.descripcion && (
+                    <p className="text-sm text-slate-500">{grupo.seccion.descripcion}</p>
+                  )}
+                </div>
+                <span className="text-xs text-slate-400">
+                  ({grupo.preguntas.length} pregunta{grupo.preguntas.length === 1 ? '' : 's'})
+                </span>
+              </div>
+            )}
 
-          return (
+            {grupo.preguntas.map((pregunta) => {
+              const def = defDeTipo(pregunta.tipo);
+              const conOpciones = usaOpciones(pregunta.tipo);
+              const conColumnas = usaColumnas(pregunta.tipo);
+              const matriz = esMatriz(pregunta.tipo);
+              const i = indiceDe.get(pregunta.id) ?? 0;
+
+              return (
             <div key={pregunta.id} className="bg-white border border-slate-200 rounded-md p-4">
               <div className="flex items-start gap-3">
                 <span className="text-sm font-semibold text-slate-400 mt-2">{i + 1}.</span>
@@ -394,9 +476,9 @@ export const EditarEncuesta: React.FC = () => {
                     onChange={(e) => cambiarTipo(pregunta.id, e.target.value as TipoPregunta)}
                     className="mt-2 border border-slate-300 rounded px-2 py-1 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
                   >
-                    {GRUPOS_TIPOS.map((grupo) => (
-                      <optgroup key={grupo.id} label={grupo.etiqueta}>
-                        {grupo.tipos.map((t) => (
+                    {GRUPOS_TIPOS.map((grupoTipos) => (
+                      <optgroup key={grupoTipos.id} label={grupoTipos.etiqueta}>
+                        {grupoTipos.tipos.map((t) => (
                           <option key={t.tipo} value={t.tipo}>
                             {t.etiqueta}
                           </option>
@@ -405,6 +487,26 @@ export const EditarEncuesta: React.FC = () => {
                     ))}
                   </select>
                   <p className="mt-1 text-xs text-slate-400">{def.descripcion}</p>
+
+                  {secciones.length > 0 && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className={`${etiquetaCls} shrink-0`}>Sección</span>
+                      <select
+                        value={pregunta.seccionId ?? ''}
+                        onChange={(e) =>
+                          asignarPregunta(pregunta.id, e.target.value || undefined)
+                        }
+                        className="border border-slate-300 rounded px-2 py-1 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+                      >
+                        <option value="">Sin sección</option>
+                        {secciones.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.titulo || 'Sección sin título'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {!esInformativa(pregunta.tipo) && (
                     <label className="flex items-center gap-2 mt-2 text-sm text-slate-600">
@@ -647,16 +749,16 @@ export const EditarEncuesta: React.FC = () => {
 
                 <div className="flex flex-col gap-1 shrink-0 mt-1">
                   <button
-                    onClick={() => moverPregunta(i, -1)}
-                    disabled={i === 0}
+                    onClick={() => moverPregunta(pregunta.id, -1)}
+                    disabled={!limites.get(pregunta.id)?.arriba}
                     className="text-slate-300 hover:text-[#1f2421] disabled:opacity-30"
                     title="Subir pregunta"
                   >
                     <ChevronUp className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => moverPregunta(i, 1)}
-                    disabled={i === preguntas.length - 1}
+                    onClick={() => moverPregunta(pregunta.id, 1)}
+                    disabled={!limites.get(pregunta.id)?.abajo}
                     className="text-slate-300 hover:text-[#1f2421] disabled:opacity-30"
                     title="Bajar pregunta"
                   >
@@ -673,8 +775,10 @@ export const EditarEncuesta: React.FC = () => {
                 </button>
               </div>
             </div>
-          );
-        })}
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       <div className="flex gap-3">

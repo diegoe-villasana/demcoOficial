@@ -44,10 +44,21 @@ export type TipoPregunta =
 // que en el .docx sólo servía para forzar un valor numérico).
 export type FormatoNumero = 'entero' | 'decimal' | 'porcentaje' | 'moneda';
 
+// Una sección divide la encuesta en tramos ("sección 1", "Datos generales",
+// etc.). Las preguntas apuntan a su sección con `seccionId`; las que no
+// tienen sección se muestran al final, sin encabezado.
+export interface Seccion {
+  id: string;
+  titulo: string;
+  descripcion?: string;
+}
+
 export interface Pregunta {
   id: string;
   texto: string;
   tipo: TipoPregunta;
+  /** Sección a la que pertenece la pregunta (opcional). */
+  seccionId?: string;
   /** Opciones de respuesta. En matrices son las filas. */
   opciones?: string[];
   /** Columnas de la matriz. En `matriz_columnas` son los ítems a calificar. */
@@ -83,6 +94,7 @@ export interface Encuesta {
   titulo: string;
   descripcion?: string;
   preguntas: Pregunta[];
+  secciones?: Seccion[];
   versionId?: string;
   versionNumero?: number;
   sellada?: boolean;
@@ -96,6 +108,7 @@ export interface VersionHistorial {
   titulo: string;
   descripcion?: string;
   preguntas: Pregunta[];
+  secciones?: Seccion[];
   creadaEn: string;
   sellada: boolean;
   totalRespuestas: number;

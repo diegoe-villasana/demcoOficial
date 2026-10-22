@@ -1,4 +1,4 @@
-import { getDB, Encuesta, RespuestaEncuesta, Pregunta, VersionHistorial, ValorRespuesta } from '../db/schema';
+import { getDB, Encuesta, RespuestaEncuesta, Pregunta, Seccion, VersionHistorial, ValorRespuesta } from '../db/schema';
 
 const SYNC_TAG = 'sync-encuestas';
 
@@ -137,6 +137,8 @@ export interface EncuestaEditable {
   titulo: string;
   descripcion?: string;
   preguntas: Pregunta[];
+  /** Tramos en los que se divide la encuesta (opcional). */
+  secciones?: Seccion[];
 }
 
 function cuerpoDe(encuesta: EncuestaEditable) {
@@ -144,6 +146,7 @@ function cuerpoDe(encuesta: EncuestaEditable) {
     titulo: encuesta.titulo,
     descripcion: encuesta.descripcion,
     preguntas: encuesta.preguntas,
+    secciones: encuesta.secciones ?? [],
   });
 }
 

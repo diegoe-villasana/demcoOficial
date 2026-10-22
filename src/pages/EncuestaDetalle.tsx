@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { CheckCircle2, ArrowLeft, ChevronUp, ChevronDown, Paperclip } from 'lucide-react';
 import { obtenerEncuesta, guardarRespuesta } from '../services/encuestasService';
 import { Encuesta, Pregunta, ValorRespuesta } from '../db/schema';
+import { agruparPorSeccion } from '../services/secciones';
 import {
   COLUMNAS_LIKERT,
   esInformativa,
@@ -559,9 +560,31 @@ export const EncuestaDetalle: React.FC = () => {
     [encuesta]
   );
 
+  // Las preguntas se muestran por sección (tramos) si la encuesta las tiene.
+  // Las secciones vacías no se muestran: al respondent no le aportan nada.
+  const grupos = useMemo(
+    () =>
+      agruparPorSeccion(encuesta?.preguntas ?? [], encuesta?.secciones ?? []).filter(
+        (grupo) => grupo.preguntas.length > 0
+      ),
+    [encuesta]
+  );
+
   const handleChange = (clave: string, valor: ValorRespuesta) => {
     setRespuestas((prev) => ({ ...prev, [clave]: valor }));
   };
+
+  // Numera sólo las preguntas respondibles, igual que el formulario público.
+  const indiceDe = useMemo(() => {
+    const mapa = new Map<string, number>();
+    let n = 0;
+    for (const grupo of grupos) {
+      for (const p of grupo.preguntas) {
+        if (!esInformativa(p.tipo)) mapa.set(p.id, n++);
+      }
+    }
+    return mapa;
+  }, [grupos]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -615,34 +638,49 @@ export const EncuestaDetalle: React.FC = () => {
       {encuesta.descripcion && <p className="text-slate-500 mb-6">{encuesta.descripcion}</p>}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-        {encuesta.preguntas.map((pregunta, i) => {
-          if (esInformativa(pregunta.tipo)) {
-            return (
-              <div key={pregunta.id} className="bg-slate-50 border border-slate-200 rounded-md p-5">
-                <InputPregunta
-                  pregunta={pregunta}
-                  respuestas={respuestas}
-                  onChange={handleChange}
-                />
+        {grupos.map((grupo) => (
+          <div key={grupo.seccion?.id ?? 'sin-seccion'} className="flex flex-col gap-4">
+            {grupo.seccion && (
+              <div className="border-l-4 border-[#008751] bg-[#008751]/5 rounded-r-md px-4 py-3">
+                <p className="font-semibold text-[#1f2421]">{grupo.seccion.titulo}</p>
+                {grupo.seccion.descripcion && (
+                  <p className="text-sm text-slate-600 mt-0.5">{grupo.seccion.descripcion}</p>
+                )}
               </div>
-            );
-          }
+            )}
 
-          return (
-            <div key={pregunta.id} className="bg-white border border-slate-200 rounded-md p-5">
-              <label className="block font-medium text-[#1f2421] mb-3">
-                {i + 1}. {pregunta.texto}
-                {pregunta.obligatorio && <span className="text-red-500"> *</span>}
-              </label>
+            {grupo.preguntas.map((pregunta) => {
+              const i = (indiceDe.get(pregunta.id) ?? 0) + 1;
 
-              <InputPregunta
-                pregunta={pregunta}
-                respuestas={respuestas}
-                onChange={handleChange}
-              />
-            </div>
-          );
-        })}
+              if (esInformativa(pregunta.tipo)) {
+                return (
+                  <div key={pregunta.id} className="bg-slate-50 border border-slate-200 rounded-md p-5">
+                    <InputPregunta
+                      pregunta={pregunta}
+                      respuestas={respuestas}
+                      onChange={handleChange}
+                    />
+                  </div>
+                );
+              }
+
+              return (
+                <div key={pregunta.id} className="bg-white border border-slate-200 rounded-md p-5">
+                  <label className="block font-medium text-[#1f2421] mb-3">
+                    {i}. {pregunta.texto}
+                    {pregunta.obligatorio && <span className="text-red-500"> *</span>}
+                  </label>
+
+                  <InputPregunta
+                    pregunta={pregunta}
+                    respuestas={respuestas}
+                    onChange={handleChange}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ))}
 
         {preguntasRespondibles.length > 0 && (
           <button

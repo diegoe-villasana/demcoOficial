@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileUp, FileText, X, Trash2, Save, ArrowLeft } from 'lucide-react';
 import { Encuesta } from '../db/schema';
 import { guardarEncuestaCompleta } from '../services/encuestasService';
 import { extraerTextoDocx, convertirTextoEnEncuesta } from '../services/parseWordEncuesta';
 import { defDeTipo, etiquetaTipo, GrupoTipo } from '../services/tiposPregunta';
+import { SeccionesEditor } from '../components/SeccionesEditor';
+import { agruparPorSeccion } from '../services/secciones';
 
 const COLORES_GRUPO: Record<GrupoTipo, string> = {
   predefinidas: 'bg-emerald-100 text-emerald-700',
@@ -54,16 +56,58 @@ export const CrearEncuesta: React.FC = () => {
     );
   };
 
+  // Mete o saca una pregunta de una sección. Sin sección = undefined.
+  const asignarPregunta = (id: string, seccionId: string | undefined) => {
+    setEncuesta((prev) =>
+      prev
+        ? {
+            ...prev,
+            preguntas: prev.preguntas.map((p) => {
+              if (p.id !== id) return p;
+              if (seccionId) return { ...p, seccionId };
+              const { seccionId: _fuera, ...resto } = p;
+              return resto;
+            }),
+          }
+        : prev
+    );
+  };
+
+  const grupos = useMemo(
+    () => agruparPorSeccion(encuesta?.preguntas ?? [], encuesta?.secciones ?? []),
+    [encuesta]
+  );
+
+  // Número de cada pregunta en el orden en que se muestra (por secciones).
+  const indiceDe = useMemo(() => {
+    const mapa = new Map<string, number>();
+    let n = 0;
+    for (const grupo of grupos) {
+      for (const p of grupo.preguntas) mapa.set(p.id, n++);
+    }
+    return mapa;
+  }, [grupos]);
+
   const guardar = async () => {
     if (!encuesta || encuesta.preguntas.length === 0) return;
     try {
+      const idsSeccion = new Set((encuesta.secciones ?? []).map((s) => s.id));
+
       // Persiste en el servidor (crea v1) y refresca el caché local; solo así
       // la encuesta sale en el correo y /e/:id la sirve al destinatario.
       await guardarEncuestaCompleta(
         {
           titulo: encuesta.titulo,
           descripcion: encuesta.descripcion,
-          preguntas: encuesta.preguntas,
+          preguntas: encuesta.preguntas.map((p) => ({
+            ...p,
+            seccionId: p.seccionId && idsSeccion.has(p.seccionId) ? p.seccionId : undefined,
+          })),
+          secciones: (encuesta.secciones ?? []).map((s) => ({
+            id: s.id,
+            titulo: s.titulo.trim(),
+            descripcion: s.descripcion?.trim() || undefined,
+          })),
         },
         undefined
       );
@@ -121,14 +165,20 @@ export const CrearEncuesta: React.FC = () => {
             <p className="font-medium mb-2">Para que funcione, tu documento debe seguir este formato:</p>
             <p className="font-mono text-blue-900 whitespace-pre-line bg-white rounded p-3">
 {`Título de la encuesta
+[Sección: Datos generales]
 ¿Cuál es tu barrio? [Múltiple]
 - Centro
 - Norte
 - Sur
+[Sección: Opinión]
 ¿Qué opinas del servicio? [Abierta]
 ¿Cómo calificas estos aspectos? [Matriz]
 - Atención al cliente
 - Calidad del servicio`}
+            </p>
+            <p className="mt-2">
+              Con <b>[Sección: …]</b> divides el documento en partes; las preguntas que siguen
+              quedan en esa sección.
             </p>
           </div>
         </div>
@@ -157,42 +207,97 @@ export const CrearEncuesta: React.FC = () => {
               No se detectaron preguntas. Revisa el formato del documento.
             </p>
           ) : (
-            <ul className="flex flex-col gap-3 mb-6">
-              {encuesta.preguntas.map((pregunta, index) => (
-                <li
-                  key={pregunta.id}
-                  className="border border-slate-200 rounded-md p-4 flex items-start gap-3"
-                >
-                  <span className="text-sm font-semibold text-slate-400 mt-0.5">
-                    {index + 1}.
-                  </span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-medium text-[#1f2421]">{pregunta.texto}</p>
-                      <button
-                        onClick={() => eliminarPregunta(pregunta.id)}
-                        title="Eliminar pregunta"
-                        className="text-slate-300 hover:text-red-500 transition-colors shrink-0"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <span
-                      className={`inline-block text-xs px-2 py-0.5 rounded-full mt-2 ${
-                        COLORES_GRUPO[defDeTipo(pregunta.tipo).grupo]
-                      }`}
-                    >
-                      {etiquetaTipo(pregunta.tipo)}
-                    </span>
-                    {pregunta.opciones && pregunta.opciones.length > 0 && (
-                      <p className="text-sm text-slate-500 mt-2">
-                        Opciones: {pregunta.opciones.join(', ')}
-                      </p>
+            <>
+              <div className="mb-4">
+                <SeccionesEditor
+                  secciones={encuesta.secciones ?? []}
+                  preguntas={encuesta.preguntas}
+                  onCambiarSecciones={(secciones) =>
+                    setEncuesta((prev) => (prev ? { ...prev, secciones } : prev))
+                  }
+                  onAsignarPregunta={asignarPregunta}
+                />
+              </div>
+
+              <div className="flex flex-col gap-4 mb-6">
+                {grupos.map((grupo) => (
+                  <div key={grupo.seccion?.id ?? 'sin-seccion'} className="flex flex-col gap-3">
+                    {grupo.seccion && (
+                      <div className="flex items-center gap-2">
+                        <span className="w-1.5 h-6 rounded bg-[#008751]" />
+                        <div>
+                          <p className="font-medium text-[#1f2421]">{grupo.seccion.titulo}</p>
+                          {grupo.seccion.descripcion && (
+                            <p className="text-sm text-slate-500">{grupo.seccion.descripcion}</p>
+                          )}
+                        </div>
+                        <span className="text-xs text-slate-400">
+                          ({grupo.preguntas.length} pregunta{grupo.preguntas.length === 1 ? '' : 's'})
+                        </span>
+                      </div>
                     )}
+
+                    <ul className="flex flex-col gap-3">
+                      {grupo.preguntas.map((pregunta) => (
+                        <li
+                          key={pregunta.id}
+                          className="border border-slate-200 rounded-md p-4 flex items-start gap-3"
+                        >
+                          <span className="text-sm font-semibold text-slate-400 mt-0.5">
+                            {(indiceDe.get(pregunta.id) ?? 0) + 1}.
+                          </span>
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-medium text-[#1f2421]">{pregunta.texto}</p>
+                              <button
+                                onClick={() => eliminarPregunta(pregunta.id)}
+                                title="Eliminar pregunta"
+                                className="text-slate-300 hover:text-red-500 transition-colors shrink-0"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <span
+                              className={`inline-block text-xs px-2 py-0.5 rounded-full mt-2 ${
+                                COLORES_GRUPO[defDeTipo(pregunta.tipo).grupo]
+                              }`}
+                            >
+                              {etiquetaTipo(pregunta.tipo)}
+                            </span>
+                            {pregunta.opciones && pregunta.opciones.length > 0 && (
+                              <p className="text-sm text-slate-500 mt-2">
+                                Opciones: {pregunta.opciones.join(', ')}
+                              </p>
+                            )}
+                            {(encuesta.secciones?.length ?? 0) > 0 && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+                                  Sección
+                                </span>
+                                <select
+                                  value={pregunta.seccionId ?? ''}
+                                  onChange={(e) =>
+                                    asignarPregunta(pregunta.id, e.target.value || undefined)
+                                  }
+                                  className="border border-slate-300 rounded px-2 py-1 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#008751]/30"
+                                >
+                                  <option value="">Sin sección</option>
+                                  {(encuesta.secciones ?? []).map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.titulo || 'Sección sin título'}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </li>
-              ))}
-            </ul>
+                ))}
+              </div>
+            </>
           )}
 
           <div className="flex gap-3">

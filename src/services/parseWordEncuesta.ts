@@ -1,5 +1,5 @@
 import * as mammoth from 'mammoth';
-import { Encuesta, Pregunta } from '../db/schema';
+import { Encuesta, Pregunta, Seccion } from '../db/schema';
 import { COLUMNAS_LIKERT, crearPreguntaPorTipo, detectarTipoDesdeEtiqueta } from './tiposPregunta';
 
 export async function extraerTextoDocx(archivo: File): Promise<string> {
@@ -10,6 +10,8 @@ export async function extraerTextoDocx(archivo: File): Promise<string> {
 
 const TIPO_PATTERN = /\[([^\]]+)\]\s*$/i;
 const OPCION_PATTERN = /^[-•*]\s+|\d+[.)]\s+|[a-zA-Z][.)]\s+/;
+// Un encabezado de sección en el documento: [Sección: Datos generales]
+const SECCION_PATTERN = /^\[\s*Secci[oó]n\s*[:\-]\s*(.+?)\s*\]$/i;
 
 function sinEtiqueta(parrafo: string): { texto: string; etiqueta: string | null } {
   const match = parrafo.match(TIPO_PATTERN);
@@ -24,11 +26,25 @@ export function convertirTextoEnEncuesta(texto: string): Encuesta {
     .filter((p) => p.length > 0);
 
   const preguntas: Pregunta[] = [];
+  const secciones: Seccion[] = [];
   let actual: Pregunta | null = null;
+  let seccionActual: Seccion | null = null;
 
   const titulo = parrafos[0] || 'Encuesta sin título';
 
   for (const parrafo of parrafos.slice(1)) {
+    // Encabezado de sección: abre un tramo nuevo de la encuesta.
+    const matchSeccion = parrafo.match(SECCION_PATTERN);
+    if (matchSeccion) {
+      const tituloSeccion = matchSeccion[1].trim();
+      if (tituloSeccion) {
+        seccionActual = { id: crypto.randomUUID(), titulo: tituloSeccion };
+        secciones.push(seccionActual);
+      }
+      actual = null;
+      continue;
+    }
+
     if (actual && OPCION_PATTERN.test(parrafo)) {
       const opcion = parrafo.replace(/^[-•*]\s+|\d+[.)]\s+|[a-zA-Z][.)]\s+/, '').trim();
       if (!actual.opciones) actual.opciones = [];
@@ -46,6 +62,7 @@ export function convertirTextoEnEncuesta(texto: string): Encuesta {
     if (tipo === 'matriz' && !actual.columnas?.length) {
       actual.columnas = [...COLUMNAS_LIKERT];
     }
+    if (seccionActual) actual.seccionId = seccionActual.id;
     preguntas.push(actual);
   }
 
@@ -53,5 +70,6 @@ export function convertirTextoEnEncuesta(texto: string): Encuesta {
     id: crypto.randomUUID(),
     titulo,
     preguntas,
+    secciones,
   };
 }

@@ -1,12 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BarChart3, Inbox, AlertCircle, MessageSquare, GitBranch } from 'lucide-react';
+import {
+  ArrowLeft,
+  BarChart3,
+  Inbox,
+  AlertCircle,
+  MessageSquare,
+  GitBranch,
+  Download,
+} from 'lucide-react';
 import {
   obtenerEncuesta,
   obtenerRespuestasRecibidas,
   obtenerVersionesEnServidor,
   type RespuestaRecibida,
 } from '../services/encuestasService';
+import { exportarRespuestasAExcel } from '../services/exportarRespuestas';
 import { Encuesta, Pregunta, ValorRespuesta, VersionHistorial } from '../db/schema';
 import { esInformativa, esMatriz, rangoEscala, TIPOS_ESCALA, TIPOS_TEXTO } from '../services/tiposPregunta';
 
@@ -373,6 +382,7 @@ export const RespuestasPage: React.FC = () => {
   const [respuestas, setRespuestas] = useState<RespuestaRecibida[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportando, setExportando] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -424,6 +434,22 @@ export const RespuestasPage: React.FC = () => {
   const sinVersion = respuestas.filter((r) => !r.versionId);
   const versionActiva = (versiones ?? []).slice(-1)[0];
 
+  const exportar = () => {
+    if (!encuesta) return;
+    setExportando(true);
+    try {
+      if (!exportarRespuestasAExcel(encuesta, versiones ?? [], respuestas)) {
+        setError('Todavía no hay respuestas para exportar.');
+      } else {
+        setError(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo generar el archivo de Excel.');
+    } finally {
+      setExportando(false);
+    }
+  };
+
   return (
     <div className="max-w-3xl">
       <button
@@ -433,13 +459,28 @@ export const RespuestasPage: React.FC = () => {
         <ArrowLeft className="w-4 h-4" /> Volver
       </button>
 
-      <h1 className="text-2xl font-semibold text-[#1f2421] mb-1">Respuestas</h1>
-      <p className="text-slate-500 mb-6">
-        {encuesta.titulo} — {total} respuesta{total === 1 ? '' : 's'} recibida{total === 1 ? '' : 's'}
-        {versionActiva && total > 0 && (
-          <span className="text-slate-400"> · versión activa v{versionActiva.numero}</span>
-        )}
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-[#1f2421] mb-1">Respuestas</h1>
+          <p className="text-slate-500">
+            {encuesta.titulo} — {total} respuesta{total === 1 ? '' : 's'} recibida
+            {total === 1 ? '' : 's'}
+            {versionActiva && total > 0 && (
+              <span className="text-slate-400"> · versión activa v{versionActiva.numero}</span>
+            )}
+          </p>
+        </div>
+
+        <button
+          onClick={exportar}
+          disabled={total === 0 || exportando}
+          className="inline-flex items-center gap-2 bg-[#008751] hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded px-4 py-2 text-sm font-medium shrink-0"
+          title="Descarga un archivo .xlsx con una hoja por versión"
+        >
+          <Download className="w-4 h-4" />
+          {exportando ? 'Exportando…' : 'Exportar a Excel'}
+        </button>
+      </div>
 
       {error && (
         <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 text-sm mb-6">
