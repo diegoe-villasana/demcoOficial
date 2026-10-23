@@ -494,7 +494,7 @@ export const RespuestasPage: React.FC = () => {
           <Inbox className="w-10 h-10 text-slate-300 mx-auto mb-3" />
           <p className="font-medium text-[#1f2421]">Todavía no hay respuestas</p>
           <p className="text-sm text-slate-500 mt-1">
-            Cuando alguien responda el link del correo, aparecerá aquí.
+            Cuando alguien responda el enlace compartido, aparecerá aquí.
           </p>
         </div>
       ) : (

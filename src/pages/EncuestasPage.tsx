@@ -5,30 +5,19 @@ import {
   WifiOff,
   RefreshCw,
   Plus,
-  Mail,
+  Link2,
   X,
-  CheckCircle2,
+  Check,
+  Copy,
   AlertCircle,
-  Send,
   BarChart3,
   Pencil,
   Lock,
   FileUp,
 } from 'lucide-react';
-import { inicializarEncuestas, obtenerEncuestas, enviarEncuestasPorCorreo } from '../services/encuestasService';
+import { inicializarEncuestas, obtenerEncuestas, obtenerLinkPublico } from '../services/encuestasService';
 import { Encuesta } from '../db/schema';
 import { useSyncEncuestas } from '../hooks/useSyncEncuestas';
-
-const REGEX_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function dividirDestinatarios(valor: string): string[] {
-  return valor
-    .split(/[\n;,]+/)
-    .map((d) => d.trim())
-    .filter(Boolean);
-}
-
-type ResultadoEnvio = { tipo: 'ok' | 'error'; texto: string } | null;
 
 export const EncuestasPage: React.FC = () => {
   const navigate = useNavigate();
@@ -36,10 +25,8 @@ export const EncuestasPage: React.FC = () => {
   const [seleccionadas, setSeleccionadas] = useState<Set<string>>(new Set());
 
   const [modalAbierto, setModalAbierto] = useState(false);
-  const [destinatarios, setDestinatarios] = useState('');
-  const [mensaje, setMensaje] = useState('');
-  const [enviando, setEnviando] = useState(false);
-  const [resultado, setResultado] = useState<ResultadoEnvio>(null);
+  const [copiado, setCopiado] = useState<string | null>(null);
+  const [errorCopiar, setErrorCopiar] = useState<string | null>(null);
 
   const { isOnline, pendientes, sincronizando, sincronizarAhora } = useSyncEncuestas();
 
@@ -66,65 +53,38 @@ export const EncuestasPage: React.FC = () => {
 
   const abrirModal = () => {
     setModalAbierto(true);
-    setDestinatarios('');
-    setMensaje('');
-    setResultado(null);
+    setCopiado(null);
+    setErrorCopiar(null);
   };
 
   const cerrarModal = () => {
     setModalAbierto(false);
-    setResultado(null);
+    setCopiado(null);
+    setErrorCopiar(null);
   };
 
   const limpiarSeleccion = () => setSeleccionadas(new Set());
 
-  const handleEnviar = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const correos = dividirDestinatarios(destinatarios);
-    const correosInvalidos = correos.filter((c) => !REGEX_EMAIL.test(c));
-
-    if (correos.length === 0) {
-      setResultado({ tipo: 'error', texto: 'Agrega al menos un correo válido.' });
-      return;
-    }
-    if (correosInvalidos.length > 0) {
-      setResultado({
-        tipo: 'error',
-        texto: `Correos inválidos: ${correosInvalidos.join(', ')}`,
-      });
-      return;
-    }
-
-    setEnviando(true);
-    setResultado(null);
-
+  const copiar = async (texto: string, clave: string) => {
+    setErrorCopiar(null);
     try {
-      const res = await enviarEncuestasPorCorreo({
-        encuestaIds: encuestasSeleccionadas.map((enc) => enc.id),
-        destinatarios: correos,
-        mensaje: mensaje.trim() || undefined,
-      });
-      setResultado({
-        tipo: 'ok',
-        texto:
-          res.proveedor === 'simulado'
-            ? `Se envió a ${res.enviados} correo${res.enviados > 1 ? 's' : ''} (modo simulado). Revisa la consola y data/emails del backend.`
-            : `Se envió a ${res.enviados} correo${res.enviados > 1 ? 's' : ''} vía ${res.proveedor}.`,
-      });
-    } catch (err) {
-      setResultado({
-        tipo: 'error',
-        texto: err instanceof Error ? err.message : 'No se pudo enviar el correo.',
-      });
-    } finally {
-      setEnviando(false);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(texto);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = texto;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+      }
+      setCopiado(clave);
+      window.setTimeout(() => setCopiado((actual) => (actual === clave ? null : actual)), 2000);
+    } catch {
+      setErrorCopiar('No se pudo copiar el enlace. Selecciónalo y cópialo manualmente.');
     }
-  };
-
-  const cerrarYReiniciar = () => {
-    cerrarModal();
-    limpiarSeleccion();
   };
 
   return (
@@ -260,7 +220,7 @@ export const EncuestasPage: React.FC = () => {
             onClick={abrirModal}
             className="flex items-center gap-2 bg-[#008751] hover:bg-green-700 text-white rounded-full px-4 py-2 text-sm font-medium"
           >
-            <Mail className="w-4 h-4" /> Enviar por correo
+            <Link2 className="w-4 h-4" /> Compartir enlace
           </button>
         </div>
       )}
@@ -271,7 +231,7 @@ export const EncuestasPage: React.FC = () => {
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h2 className="text-lg font-semibold text-[#1f2421] flex items-center gap-2">
-                  <Send className="w-5 h-5 text-[#008751]" /> Enviar por correo
+                  <Link2 className="w-5 h-5 text-[#008751]" /> Compartir enlace
                 </h2>
                 <p className="text-sm text-slate-500 mt-1">
                   {encuestasSeleccionadas.length} encuesta{encuestasSeleccionadas.length > 1 ? 's' : ''} seleccionada{encuestasSeleccionadas.length > 1 ? 's' : ''}
@@ -282,88 +242,58 @@ export const EncuestasPage: React.FC = () => {
               </button>
             </div>
 
-            {resultado?.tipo === 'ok' ? (
-              <div className="bg-green-50 border border-green-200 text-green-800 rounded-md p-5 text-center">
-                <CheckCircle2 className="w-10 h-10 text-[#008751] mx-auto mb-2" />
-                <p className="font-medium text-[#1f2421]">¡Encuestas enviadas!</p>
-                <p className="text-sm text-slate-600 mt-1">{resultado.texto}</p>
-                <button
-                  onClick={cerrarYReiniciar}
-                  className="mt-4 bg-[#008751] hover:bg-green-700 text-white rounded px-5 py-2 font-medium"
-                >
-                  Listo
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleEnviar} className="flex flex-col gap-4">
-                <div>
-                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">
-                    Las encuestas seleccionadas se mandan con su link para responder
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {encuestasSeleccionadas.map((enc) => (
-                      <li key={enc.id} className="text-sm text-[#1f2421] flex items-center gap-2">
-                        <ClipboardList className="w-4 h-4 text-[#008751]" /> {enc.titulo}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+            <p className="text-sm text-slate-600 mb-4">
+              Copia el enlace y compártelo. Quien lo reciba podrá responder la
+              encuesta sin necesidad de una cuenta.
+            </p>
 
-                <div>
-                  <label className="block text-sm font-medium text-[#1f2421] mb-1">
-                    Destinatarios <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    value={destinatarios}
-                    onChange={(e) => setDestinatarios(e.target.value)}
-                    rows={3}
-                    placeholder={'correo1@ejemplo.com\ncorreo2@ejemplo.com'}
-                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]"
-                  />
-                  <p className="text-xs text-slate-400 mt-1">
-                    Separa varios correos con coma, punto y coma o una línea por cada uno.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-[#1f2421] mb-1">
-                    Mensaje (opcional)
-                  </label>
-                  <input
-                    type="text"
-                    value={mensaje}
-                    onChange={(e) => setMensaje(e.target.value)}
-                    placeholder="Hola, te compartimos estas encuestas..."
-                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#008751]"
-                  />
-                </div>
-
-                {resultado?.tipo === 'error' && (
-                  <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 text-sm">
-                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                    <span>{resultado.texto}</span>
+            <div className="flex flex-col gap-3">
+              {encuestasSeleccionadas.map((enc) => {
+                const link = obtenerLinkPublico(enc.id);
+                const esCopiado = copiado === enc.id;
+                return (
+                  <div key={enc.id} className="border border-slate-200 rounded-md p-4">
+                    <p className="text-sm font-medium text-[#1f2421] flex items-center gap-2 mb-2">
+                      <ClipboardList className="w-4 h-4 text-[#008751] shrink-0" />
+                      {enc.titulo}
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        readOnly
+                        value={link}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="flex-1 min-w-0 border border-slate-300 rounded px-3 py-2 text-xs text-slate-600 bg-slate-50"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => copiar(link, enc.id)}
+                        className="flex items-center gap-1.5 bg-[#008751] hover:bg-green-700 text-white rounded px-3 py-2 text-sm font-medium shrink-0"
+                      >
+                        {esCopiado ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                        {esCopiado ? 'Copiado' : 'Copiar'}
+                      </button>
+                    </div>
                   </div>
-                )}
+                );
+              })}
+            </div>
 
-                <div className="flex gap-3 justify-end">
-                  <button
-                    type="button"
-                    onClick={cerrarModal}
-                    className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={enviando}
-                    className="flex items-center gap-2 bg-[#008751] hover:bg-green-700 text-white rounded px-4 py-2 text-sm font-medium disabled:opacity-60"
-                  >
-                    <Mail className="w-4 h-4" />
-                    {enviando ? 'Enviando...' : 'Enviar'}
-                  </button>
-                </div>
-              </form>
+            {errorCopiar && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 text-sm mt-4">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{errorCopiar}</span>
+              </div>
             )}
+
+            <div className="flex justify-end mt-5">
+              <button
+                type="button"
+                onClick={cerrarModal}
+                className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+              >
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

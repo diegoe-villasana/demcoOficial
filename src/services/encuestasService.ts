@@ -5,6 +5,20 @@ const SYNC_TAG = 'sync-encuestas';
 // URL de tu backend real (ver carpeta demco-backend). Se lee de .env
 // como VITE_ENCUESTAS_API_URL.
 const API_URL = import.meta.env.VITE_ENCUESTAS_API_URL as string | undefined;
+// URL pública del backend desde la que se sirve el formulario /e/:id. Si no
+// se define, se deduce quitando /api/encuestas a VITE_ENCUESTAS_API_URL.
+const PUBLIC_URL = import.meta.env.VITE_PUBLIC_URL as string | undefined;
+
+export function obtenerLinkPublico(encuestaId: string): string {
+  const configurada = (PUBLIC_URL ?? API_URL ?? window.location.origin).trim();
+  const base = configurada
+    .replace(/\/api\/encuestas\/?$/i, '')
+    .replace(/\/+$/, '');
+  const origen = /^https?:\/\//i.test(base)
+    ? base
+    : `${window.location.origin}${base.startsWith('/') ? '' : '/'}${base}`;
+  return `${origen}/e/${encodeURIComponent(encuestaId)}`;
+}
 
 // ---- Datos mock: en un caso real vendrían de un GET a tu API la primera vez
 // que hay conexión, y se cachean en IndexedDB para poder responderlas offline. ----
